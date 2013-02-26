@@ -1,0 +1,1 @@
+Just add 'django-backup' to settings.INSTALLED_APPS .

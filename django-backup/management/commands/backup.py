@@ -2,10 +2,14 @@ import os, popen2, time
 from datetime import datetime
 from optparse import make_option
 
+from boto.s3.connection import S3Connection
+from boto.s3.key import Key
+
 from django.core.management.base import BaseCommand, CommandError
 from django.core.mail import EmailMessage
 from django.conf import settings
 from django.contrib.sites.models import Site
+
 
 # Based on: http://code.google.com/p/django-backup/
 # Based on: http://www.djangosnippets.org/snippets/823/
@@ -22,7 +26,8 @@ class Command(BaseCommand):
             dest='zipencrypt', help='Compress and encrypt SQL dump file using zip'),
         make_option('--backup_docs', '-b', action='store_true', default=False,
             dest='backup_docs', help='Backup your docs directory alongside the DB dump.'),
-
+        make_option('--s3', '-s', action='store_true', default=False, dest='s3',
+            help='Upload backups to Amazon S3'),
     )
     help = "Backup database. Only Mysql, Postgresql and Sqlite engines are implemented"
 
@@ -35,6 +40,7 @@ class Command(BaseCommand):
         self.directories = options.get('directories')
         self.zipencrypt = options.get('zipencrypt')
         self.backup_docs = options.get('backup_docs')
+        self.s3 = options.get('s3')
         if 'site' in settings.INSTALLED_APPS:
             self.current_site = Site.objects.get_current()
         else:
@@ -114,6 +120,15 @@ class Command(BaseCommand):
             print "Sending e-mail with backups to '%s'" % self.email
             self.sendmail(settings.SERVER_EMAIL, [self.email], dir_outfiles + [outfile])
 
+        if self.s3:
+            for localfile in dir_outfiles + [outfile]:
+                print "Uploading {} to S3".format(localfile)
+                self.upload_to_s3(localfile, settings.BACKUP_S3_BUCKET,
+                    os.path.join(settings.BACKUP_S3_DIR,
+                                 os.path.basename(localfile)),
+                    settings.BACKUP_AWS_ACCESS_KEY_ID,
+                    settings.BACKUP_AWS_SECRET_ACCESS_KEY)
+
     def compress_dir(self, directory, outfile):
         os.system('tar -czf %s %s' % (outfile, directory))
 
@@ -171,3 +186,11 @@ class Command(BaseCommand):
             command = 'pg_dump %s -w > %s' % (' '.join(args), outfile)
         os.system(command)
 
+    @staticmethod
+    def upload_to_s3(localfile, bucket_name, key_name,
+                     aws_access_key_id, aws_secret_access_key):
+        conn = S3Connection(aws_access_key_id, aws_secret_access_key)
+        bucket = conn.get_bucket(bucket_name)
+        k = Key(bucket, key_name)
+        k.set_contents_from_filename(localfile)
+        return k.etag

@@ -10,5 +10,5 @@ setup(
     description    = 'A backup script for the Django admin',
     packages=find_packages(),
     include_package_data=True,
+    install_requires = ['boto>=2.8.0',],
 )
-

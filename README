@@ -13,3 +13,14 @@ Usage:
     python manage.py backup -m my@email.com
     python manage.py backup -m my@email.com -z   (will zip using password in backup.py)
     python manage.py backup -m my@email.com -c   (will compress using GZip -- but does not have password)
+    python manage.py backup -c -s                (will compress and upload backup files to Amazon S3)
+
+
+settings.py :
+
+Next settings should be defined for uploading backups to S3:
+
+BACKUP_AWS_ACCESS_KEY_ID = "MMM"
+BACKUP_AWS_SECRET_ACCESS_KEY = "NNN"
+BACKUP_S3_BUCKET = "mybucket"
+BACKUP_S3_DIR = "backups/myproject"
