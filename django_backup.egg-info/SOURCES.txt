@@ -12,5 +12,6 @@ django-backup/management/commands/backup.py
 django_backup.egg-info/PKG-INFO
 django_backup.egg-info/SOURCES.txt
 django_backup.egg-info/dependency_links.txt
+django_backup.egg-info/requires.txt
 django_backup.egg-info/top_level.txt
 docs/Makefile
