@@ -1,3 +1,4 @@
+import re
 import os, popen2, time
 from datetime import datetime
 from optparse import make_option
@@ -27,12 +28,10 @@ class Command(BaseCommand):
         make_option('--backup_docs', '-b', action='store_true', default=False,
             dest='backup_docs', help='Backup your docs directory alongside the DB dump.'),
         make_option('--s3', '-s', action='store_true', default=False, dest='s3',
-            help='Upload backups to Amazon S3'),
+            help='Upload new backups to Amazon S3 and remove old. Configure BACKUP_* in settings.py'),
     )
     help = "Backup database. Only Mysql, Postgresql and Sqlite engines are implemented"
 
-    def _time_suffix(self):
-        return time.strftime('%Y%m%d-%H%M%S')
 
     def handle(self, *args, **options):
         self.email = options.get('email')
@@ -64,15 +63,17 @@ class Command(BaseCommand):
             self.port = settings.DATABASE_PORT
             
         self.media_directory = settings.MEDIA_ROOT
-            
+
+        self.time_suffix = time.strftime('%Y%m%d-%H%M%S')
+        
         backup_dir = 'backups'
         if self.backup_docs:
-            backup_dir = "backups/%s" % self._time_suffix()
+            backup_dir = "backups/%s" % self.time_suffix
             
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
 
-        outfile = os.path.join(backup_dir, 'backup_%s.sql' % self._time_suffix())
+        outfile = os.path.join(backup_dir, 'backup_%s.sql' % self.time_suffix)
 
         #Backup documents?
         if self.backup_docs:
@@ -110,7 +111,7 @@ class Command(BaseCommand):
         # Backuping directoris
         dir_outfiles = []
         for directory in self.directories:
-            dir_outfile = os.path.join(backup_dir, '%s_%s.tar.gz' % (os.path.basename(directory), self._time_suffix()))
+            dir_outfile = os.path.join(backup_dir, '%s_%s.tar.gz' % (os.path.basename(directory), self.time_suffix))
             dir_outfiles.append(dir_outfile)
             print("Compressing '%s' to '%s'" % (directory, dir_outfile))
             self.compress_dir(directory, dir_outfile)
@@ -128,6 +129,8 @@ class Command(BaseCommand):
                                  os.path.basename(localfile)),
                     settings.BACKUP_AWS_ACCESS_KEY_ID,
                     settings.BACKUP_AWS_SECRET_ACCESS_KEY)
+
+            self.s3_remove_old()
 
     def compress_dir(self, directory, outfile):
         os.system('tar -czf %s %s' % (outfile, directory))
@@ -194,3 +197,52 @@ class Command(BaseCommand):
         k = Key(bucket, key_name)
         k.set_contents_from_filename(localfile)
         return k.etag
+
+    @staticmethod
+    def s3_bucket_ls_dir(bucket_name, dir,
+                     aws_access_key_id, aws_secret_access_key):
+        conn = S3Connection(aws_access_key_id, aws_secret_access_key)
+        bucket = conn.get_bucket(bucket_name)
+        return bucket.list(prefix=dir)
+
+    @staticmethod
+    def s3_bucket_delete_keys(bucket_name, keys,
+                     aws_access_key_id, aws_secret_access_key):
+        conn = S3Connection(aws_access_key_id, aws_secret_access_key)
+        bucket = conn.get_bucket(bucket_name)
+        return bucket.delete_keys(keys)
+
+    def backups_for_removing(self, files, keepnbackups):
+        backups = []
+        timestams = set()
+        r = re.compile('.+_(20\d{6})-(\d{6})')
+        for file in files:
+            rm = r.match(file.key) 
+            if rm is None:
+                continue
+            k = "".join(rm.groups())
+            backups.append((k, file))
+            timestams.add(k)
+        old_timestamps = sorted(list(timestams))[0:-keepnbackups]
+        oldbackups = map(lambda x:x[1],
+                         filter(lambda x:x[0] in old_timestamps, backups))
+        return oldbackups
+
+    def s3_remove_old(self):
+
+        s3_n_backups = getattr(settings, 'BACKUP_S3_KEEP_N_BACKUPS', 0)
+
+        if not s3_n_backups:
+            return
+        
+        files = self.s3_bucket_ls_dir(settings.BACKUP_S3_BUCKET,
+            settings.BACKUP_S3_DIR, settings.BACKUP_AWS_ACCESS_KEY_ID,
+            settings.BACKUP_AWS_SECRET_ACCESS_KEY)
+        
+        oldbackups = self.backups_for_removing(files, s3_n_backups)
+
+        if oldbackups:
+            print 'Removing {} old backup(s) on S3'.format(len(oldbackups))
+            self.s3_bucket_delete_keys(settings.BACKUP_S3_BUCKET, oldbackups,
+                settings.BACKUP_AWS_ACCESS_KEY_ID,
+                settings.BACKUP_AWS_SECRET_ACCESS_KEY)
