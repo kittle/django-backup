@@ -210,7 +210,8 @@ class Command(BaseCommand):
                      aws_access_key_id, aws_secret_access_key):
         conn = S3Connection(aws_access_key_id, aws_secret_access_key)
         bucket = conn.get_bucket(bucket_name)
-        return bucket.delete_keys(keys)
+        res = bucket.delete_keys(keys)
+        return res
 
     def backups_for_removing(self, files, keepnbackups):
         backups = []
@@ -243,6 +244,9 @@ class Command(BaseCommand):
 
         if oldbackups:
             print 'Removing {} old backup(s) on S3'.format(len(oldbackups))
-            self.s3_bucket_delete_keys(settings.BACKUP_S3_BUCKET, oldbackups,
-                settings.BACKUP_AWS_ACCESS_KEY_ID,
+            res = self.s3_bucket_delete_keys(settings.BACKUP_S3_BUCKET,
+                oldbackups, settings.BACKUP_AWS_ACCESS_KEY_ID,
                 settings.BACKUP_AWS_SECRET_ACCESS_KEY)
+        #import pudb; pudb.set_trace()
+        if res.errors:
+            raise RuntimeError(" ".join(map(str, res.errors)))
