@@ -25,10 +25,12 @@ class Command(BaseCommand):
             help='Include Directories'),
         make_option('--zipencrypt', '-z', action='store_true', default=False,
             dest='zipencrypt', help='Compress and encrypt SQL dump file using zip'),
-        make_option('--password', '-p', action='store', default=None,
-            dest='encrypt_password', help='zip encryption password'),
+        make_option('--password', '-p', action='store', default="",
+            dest='encrypt_password', help='zip encryption password. Or use settings.BACKUP_PASSWORD'),
         make_option('--backup_docs', '-b', action='store_true', default=False,
             dest='backup_docs', help='Backup your docs directory alongside the DB dump.'),
+        make_option('--backup_dir', '-r', action='store', default=None,
+            dest='backup_dir', help='Destination backup directory. Or use settings.BACKUP_DIR. Default is "backups"'),
         make_option('--s3', '-s', action='store_true', default=False, dest='s3',
             help='Upload new backups to Amazon S3 and remove old. Configure BACKUP_* in settings.py'),
     )
@@ -48,9 +50,8 @@ class Command(BaseCommand):
             self.current_site = ''
         if self.zipencrypt:
             self.encrypt_password = options.get('encrypt_password')
-            if self.encrypt_password is None:
-                self.encrypt_password = settings.BACKUP_PASSWORD
-                #self.encrypt_password = "ENTER PASSWORD HERE"
+            if not self.encrypt_password:
+                self.encrypt_password = getattr(settings, 'BACKUP_PASSWORD', '')
 
         if hasattr(settings, 'DATABASES'):
             #Support for changed database format
@@ -72,9 +73,13 @@ class Command(BaseCommand):
 
         self.time_suffix = time.strftime('%Y%m%d-%H%M%S')
         
-        backup_dir = 'backups'
+        backup_dir = options.get('backup_dir')
+        if backup_dir is None:
+            backup_dir = getattr(settings, 'BACKUP_DIR', None)
+            if backup_dir is None:
+                backup_dir = 'backups'
         if self.backup_docs:
-            backup_dir = "backups/%s" % self.time_suffix
+            backup_dir = os.path.join(backup_dir, self.time_suffix)
             
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
@@ -106,12 +111,17 @@ class Command(BaseCommand):
             print 'Compressing backup file %s to %s' % (outfile, compressed_outfile)
             self.do_compress(outfile, compressed_outfile)
             outfile = compressed_outfile
-            
+
         #Zip & Encrypting backup
         if self.zipencrypt:
             zip_encrypted_outfile = outfile + ".zip"
-            print 'Ziping and Encrypting backup file %s to %s' % (outfile, zip_encrypted_outfile)
-            self.do_encrypt(outfile, zip_encrypted_outfile)
+            if self.encrypt_password:
+                print 'Ziping and Encrypting backup file %s to %s' % (outfile, zip_encrypted_outfile)
+                self.do_encrypt(outfile, zip_encrypted_outfile)
+            else:
+                print 'Ziping backup file %s to %s' % (outfile, zip_encrypted_outfile)
+                os.system('zip %s %s' % (zip_encrypted_outfile, outfile))
+                os.system('rm %s' % outfile)
             outfile = zip_encrypted_outfile
 
         # Backuping directoris
