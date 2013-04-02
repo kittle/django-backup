@@ -25,6 +25,8 @@ class Command(BaseCommand):
             help='Include Directories'),
         make_option('--zipencrypt', '-z', action='store_true', default=False,
             dest='zipencrypt', help='Compress and encrypt SQL dump file using zip'),
+        make_option('--password', '-p', action='store', default=None,
+            dest='encrypt_password', help='zip encryption password'),
         make_option('--backup_docs', '-b', action='store_true', default=False,
             dest='backup_docs', help='Backup your docs directory alongside the DB dump.'),
         make_option('--s3', '-s', action='store_true', default=False, dest='s3',
@@ -44,7 +46,11 @@ class Command(BaseCommand):
             self.current_site = Site.objects.get_current()
         else:
             self.current_site = ''
-        self.encrypt_password = "ENTER PASSWORD HERE"
+        if self.zipencrypt:
+            self.encrypt_password = options.get('encrypt_password')
+            if self.encrypt_password is None:
+                self.encrypt_password = settings.BACKUP_PASSWORD
+                #self.encrypt_password = "ENTER PASSWORD HERE"
 
         if hasattr(settings, 'DATABASES'):
             #Support for changed database format
