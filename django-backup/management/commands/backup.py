@@ -69,28 +69,24 @@ class Command(BaseCommand):
             self.host = settings.DATABASE_HOST
             self.port = settings.DATABASE_PORT
             
-        self.media_directory = settings.MEDIA_ROOT
+        #self.media_directory = settings.MEDIA_ROOT
 
         self.time_suffix = time.strftime('%Y%m%d-%H%M%S')
         
         backup_dir = options.get('backup_dir')
         if backup_dir is None:
-            backup_dir = getattr(settings, 'BACKUP_DIR', None)
-            if backup_dir is None:
-                backup_dir = 'backups'
-        if self.backup_docs:
+            backup_dir = settings.BACKUP_DIR
+        
+        # odd logic
+        if self.backup_docs or self.directories:
             backup_dir = os.path.join(backup_dir, self.time_suffix)
-            
+
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
 
-        outfile = os.path.join(backup_dir, 'backup_%s.sql' % self.time_suffix)
+        dir_outfiles = []
 
-        #Backup documents?
-        if self.backup_docs:
-            print "Backing up documents directory to %s from %s" % (backup_dir,self.media_directory)
-            dir_outfile = os.path.join(backup_dir, 'media_backup.tar.gz')
-            self.compress_dir(self.media_directory, dir_outfile)
+        outfile = os.path.join(backup_dir, 'backup_%s.sql' % self.time_suffix)
 
         # Doing backup
         if 'mysql' in self.engine:
@@ -100,6 +96,7 @@ class Command(BaseCommand):
             print 'Doing Postgresql backup to database %s into %s' % (self.db, outfile)
             self.do_postgresql_backup(outfile)
         elif 'sqlite3' in self.engine:
+            outfile = os.path.join(backup_dir, 'backup_%s.sqlite3' % self.time_suffix)
             print 'Doing sqlite backup to database %s into %s' % (self.db, outfile)
             self.do_sqlite_backup(outfile)
         else:
@@ -111,45 +108,82 @@ class Command(BaseCommand):
             print 'Compressing backup file %s to %s' % (outfile, compressed_outfile)
             self.do_compress(outfile, compressed_outfile)
             outfile = compressed_outfile
+            dir_outfiles.append(outfile)
 
         #Zip & Encrypting backup
         if self.zipencrypt:
             zip_encrypted_outfile = outfile + ".zip"
             if self.encrypt_password:
-                print 'Ziping and Encrypting backup file %s to %s' % (outfile, zip_encrypted_outfile)
-                self.do_encrypt(outfile, zip_encrypted_outfile)
+                print 'Ziping and Encrypting backup file %s to %s' % (outfile,
+                                                        zip_encrypted_outfile)
+                self.do_encrypt(outfile, zip_encrypted_outfile, self.encrypt_password)
             else:
                 print 'Ziping backup file %s to %s' % (outfile, zip_encrypted_outfile)
-                os.system('zip %s %s' % (zip_encrypted_outfile, outfile))
+                #os.system('zip %s %s' % (zip_encrypted_outfile, outfile))
+                self.do_zip(outfile, zip_encrypted_outfile)
                 os.system('rm %s' % outfile)
             outfile = zip_encrypted_outfile
+            dir_outfiles.append(outfile)
 
-        # Backuping directoris
-        dir_outfiles = []
-        for directory in self.directories:
-            dir_outfile = os.path.join(backup_dir, '%s_%s.tar.gz' % (os.path.basename(directory), self.time_suffix))
+
+        """
+        #Backup documents?
+        if self.backup_docs:
+            print "Backing up documents directory to %s from %s" % (backup_dir,
+                                            self.media_directory)
+            #dir_outfile = os.path.join(backup_dir, 'media_backup.tar.gz')
+            dir_outfile = self.compress_dir(self.media_directory, backup_dir,
+                              encrypt_password=self.encrypt_password)
             dir_outfiles.append(dir_outfile)
-            print("Compressing '%s' to '%s'" % (directory, dir_outfile))
-            self.compress_dir(directory, dir_outfile)
+        """
+
+        if self.backup_docs:
+            self.directories = [settings.MEDIA_ROOT] + self.directories
+
+        # Backup directoris
+        for directory in self.directories:
+            #dir_outfile = os.path.join(backup_dir, '%s_%s.tar.gz' % (
+            #                os.path.basename(directory), self.time_suffix))
+            #self.compress_dir(directory, dir_outfile, self.encrypt_password)
+            dir_outfile = self.compress_dir(directory, backup_dir,
+                              encrypt_password=self.encrypt_password)
+            print("Backed up '%s' to '%s" % (directory, dir_outfile))
+            dir_outfiles.append(dir_outfile)
+
+        #for localfile in dir_outfiles:
+        #    pass
 
         # Sending mail with backups
         if self.email:
             print "Sending e-mail with backups to '%s'" % self.email
-            self.sendmail(settings.SERVER_EMAIL, [self.email], dir_outfiles + [outfile])
+            self.sendmail(settings.SERVER_EMAIL, [self.email], dir_outfiles)
 
         if self.s3:
-            for localfile in dir_outfiles + [outfile]:
+            for localfile in dir_outfiles:
                 print "Uploading {} to S3".format(localfile)
                 self.upload_to_s3(localfile, settings.BACKUP_S3_BUCKET,
-                    os.path.join(settings.BACKUP_S3_DIR,
+                    os.path.join(getattr(settings, 'BACKUP_S3_DIR', ''),
+                                 self.time_suffix,
                                  os.path.basename(localfile)),
                     settings.BACKUP_AWS_ACCESS_KEY_ID,
                     settings.BACKUP_AWS_SECRET_ACCESS_KEY)
 
             self.s3_remove_old()
 
-    def compress_dir(self, directory, outfile):
-        os.system('tar -czf %s %s' % (outfile, directory))
+    def compress_dir(self, directory, backup_dir, encrypt_password=None):
+        assert directory
+        #assert outfile
+        #outfile = os.path.join(backup_dir, 'media_backup.tar.gz')
+        outfile = os.path.join(backup_dir,"{}_{}".format(
+                        directory.replace("/","_"), self.time_suffix))
+        if not encrypt_password:
+            outfile += ".tar.gz"
+            os.system('tar -czf %s %s' % (outfile, directory))
+        else:
+            outfile += ".zip"
+            self.do_zip(directory, outfile, encrypt_password=encrypt_password,
+                        recurse=True)
+        return outfile
 
     def sendmail(self, address_from, addresses_to, attachements):
         subject = "Your DB-backup for %s %s" % (datetime.now().strftime("%d %b %Y"), self.current_site)
@@ -165,9 +199,24 @@ class Command(BaseCommand):
         os.system('gzip --stdout %s > %s' % (infile, outfile))
         os.system('rm %s' % infile)
 
-    def do_encrypt(self, infile, outfile):
-        os.system('zip -P %s %s %s' % (self.encrypt_password, outfile, infile))
-        os.system('rm %s' % infile)        
+    # TODO: get rid of shell parsing. use args
+    def do_zip(self, infiles, outfile, encrypt_password=None, recurse=False):
+        cmd = "zip"
+
+        if recurse:
+            cmd += ' -r'
+
+        if encrypt_password:
+            cmd += ' -P %s' % encrypt_password
+
+        cmd += ' %s %s' % (outfile, infiles)
+
+        os.system(cmd)
+
+    def do_encrypt(self, infile, outfile, encrypt_password):
+        #os.system('zip -P %s %s %s' % (self.encrypt_password, outfile, infile))
+        self.do_zip(infile, outfile, encrypt_password)
+        os.system('rm %s' % infile)
         
         #os.system('gpg --yes --passphrase %s -c %s' % (self.encrypt_password, infile))        
         #os.system('rm %s' % infile)
